@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "utils/scenario_cli.h"
+#include "benchmark/scenario.h"
+#include "benchmark/allocate_once.h"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -14,9 +16,9 @@
 namespace nixlbench {
 namespace {
 
-    class Arguments {
+    class testArguments {
     public:
-        Arguments(std::initializer_list<const char *> values) {
+        testArguments(std::initializer_list<const char *> values) {
             for (const auto *value : values) {
                 storage_.emplace_back(value);
             }
@@ -40,38 +42,35 @@ namespace {
         std::vector<char *> pointers_;
     };
 
-    PluginMetadata
+    pluginMetadata
     posixMetadata() {
         return {"POSIX",
                 {DRAM_SEG, FILE_SEG},
                 {{"future_parameter", "default"}, {"ios_pool_size", "4096"}}};
     }
 
-    PluginMetadata
+    pluginMetadata
     futureFileMetadata() {
         return {
             "FUTURE-FILE", {VRAM_SEG, DRAM_SEG, FILE_SEG}, {{"provider-key", "provider default"}}};
     }
 
-    int
-    parse(Arguments &arguments,
-          const std::vector<PluginMetadata> &metadata,
-          AllocateOnceRequest &request,
+    scenarioCommandResult
+    parse(testArguments &arguments,
+          const std::vector<pluginMetadata> &metadata,
           std::ostringstream &out,
-          std::ostringstream &err,
-          bool &help) {
-        return parseAllocateOnceCommand(
-            arguments.argc(), arguments.argv(), metadata, request, help, out, err);
+          std::ostringstream &err) {
+        return prepareScenarioCommand(arguments.argc(), arguments.argv(), metadata, out, err);
     }
 
     TEST(ScenarioCliDispatchTest, OnlyExplicitScenarioSelectsTheScenarioParser) {
-        Arguments scenario{"nixlbench", "scenario", "allocate-once"};
+        testArguments scenario{"nixlbench", "scenario", "allocate-once"};
         EXPECT_TRUE(isScenarioCommand(scenario.argc(), scenario.argv()));
 
-        Arguments raw{"nixlbench", "raw", "posix"};
+        testArguments raw{"nixlbench", "raw", "posix"};
         EXPECT_FALSE(isScenarioCommand(raw.argc(), raw.argv()));
 
-        Arguments legacy{"nixlbench", "--backend=POSIX"};
+        testArguments legacy{"nixlbench", "--backend=POSIX"};
         EXPECT_FALSE(isScenarioCommand(legacy.argc(), legacy.argv()));
     }
 
@@ -83,162 +82,192 @@ namespace {
     }
 
     TEST(ScenarioParserTest, AcceptsCompatibleFuturePluginAndPreservesOpaqueParameters) {
-        Arguments arguments{"nixlbench",
+        testArguments arguments{"nixlbench",
+                                "scenario",
+                                "allocate-once",
+                                "--file-size",
+                                "1MiB",
+                                "--block-size",
+                                "4KiB",
+                                "future-file",
+                                "--plugin-param",
+                                "provider-key",
+                                "Exact Value"};
+        std::ostringstream out;
+        std::ostringstream err;
+
+        auto result = parse(arguments, {futureFileMetadata()}, out, err);
+        ASSERT_EQ(result.status, 0) << err.str();
+        ASSERT_NE(result.scenario, nullptr);
+        const auto config = result.scenario->legacyWorkerConfiguration();
+        EXPECT_EQ(config.common.pluginParameters.at("provider-key"), "Exact Value");
+        const auto benchmark_arguments = legacyWorkerArguments(config, "nixlbench");
+        EXPECT_NE(std::find(benchmark_arguments.begin(),
+                            benchmark_arguments.end(),
+                            "--backend=FUTURE-FILE"),
+                  benchmark_arguments.end());
+        EXPECT_NE(std::find(benchmark_arguments.begin(),
+                            benchmark_arguments.end(),
+                            "--initiator_seg_type=VRAM"),
+                  benchmark_arguments.end());
+    }
+
+    TEST(ScenarioParserTest, ScenarioOptionsWorkBeforeOrAfterPluginSelection) {
+        testArguments before{"nixlbench",
+                             "scenario",
+                             "allocate-once",
+                             "--file-size",
+                             "1MiB",
+                             "--block-size",
+                             "4KiB",
+                             "--threads",
+                             "2",
+                             "posix",
+                             "--num-files",
+                             "2"};
+        testArguments after{"nixlbench",
                             "scenario",
                             "allocate-once",
+                            "posix",
                             "--file-size",
                             "1MiB",
                             "--block-size",
                             "4KiB",
-                            "future-file",
-                            "--plugin-param",
-                            "provider-key",
-                            "Exact Value"};
-        AllocateOnceRequest request;
-        bool help = false;
-        std::ostringstream out;
-        std::ostringstream err;
-
-        ASSERT_EQ(parse(arguments, {futureFileMetadata()}, request, out, err, help), 0)
-            << err.str();
-        EXPECT_EQ(request.plugin_name, "FUTURE-FILE");
-        EXPECT_EQ(request.plugin_parameters.at("provider-key"), "Exact Value");
-        EXPECT_EQ(request.initiator_memory, VRAM_SEG);
-    }
-
-    TEST(ScenarioParserTest, ScenarioOptionsWorkBeforeOrAfterPluginSelection) {
-        Arguments before{"nixlbench",
-                         "scenario",
-                         "allocate-once",
-                         "--file-size",
-                         "1MiB",
-                         "--block-size",
-                         "4KiB",
-                         "--threads",
-                         "2",
-                         "posix",
-                         "--num-files",
-                         "2"};
-        Arguments after{"nixlbench",
-                        "scenario",
-                        "allocate-once",
-                        "posix",
-                        "--file-size",
-                        "1MiB",
-                        "--block-size",
-                        "4KiB",
-                        "--threads",
-                        "2",
-                        "--num-files",
-                        "2"};
+                            "--threads",
+                            "2",
+                            "--num-files",
+                            "2"};
         for (auto *arguments : {&before, &after}) {
-            AllocateOnceRequest request;
-            bool help = false;
             std::ostringstream out;
             std::ostringstream err;
-            ASSERT_EQ(parse(*arguments, {posixMetadata()}, request, out, err, help), 0)
-                << err.str();
-            EXPECT_EQ(request.threads, 2);
-            EXPECT_EQ(request.files.size(), 2U);
+            auto result = parse(*arguments, {posixMetadata()}, out, err);
+            ASSERT_EQ(result.status, 0) << err.str();
+            EXPECT_NE(out.str().find("worker threads: 2"), std::string::npos);
+            EXPECT_NE(out.str().find("files: 2"), std::string::npos);
         }
     }
 
     TEST(ScenarioParserTest, RejectsInvalidCapacityOwnershipAndMemoryRequests) {
-        const auto expect_failure = [](Arguments &arguments, const std::string &message) {
-            AllocateOnceRequest request;
-            bool help = false;
+        const auto expect_failure = [](testArguments &arguments, const std::string &message) {
             std::ostringstream out;
             std::ostringstream err;
-            EXPECT_NE(parse(arguments, {posixMetadata()}, request, out, err, help), 0);
+            EXPECT_NE(parse(arguments, {posixMetadata()}, out, err).status, 0);
             EXPECT_NE(err.str().find(message), std::string::npos) << err.str();
         };
 
-        Arguments too_small{"nixlbench",
-                            "scenario",
-                            "allocate-once",
-                            "--file-size",
-                            "4KiB",
-                            "--block-size",
-                            "4KiB",
-                            "--batch-size",
-                            "2",
-                            "posix"};
+        testArguments too_small{"nixlbench",
+                                "scenario",
+                                "allocate-once",
+                                "--file-size",
+                                "4KiB",
+                                "--block-size",
+                                "4KiB",
+                                "--batch-size",
+                                "2",
+                                "posix"};
         expect_failure(too_small, "--batch-size");
 
-        Arguments fractional_block{"nixlbench",
-                                   "scenario",
-                                   "allocate-once",
-                                   "--file-size",
-                                   "10KiB",
-                                   "--block-size",
-                                   "4KiB",
-                                   "posix"};
+        testArguments fractional_block{"nixlbench",
+                                       "scenario",
+                                       "allocate-once",
+                                       "--file-size",
+                                       "10KiB",
+                                       "--block-size",
+                                       "4KiB",
+                                       "posix"};
         expect_failure(fractional_block, "exact multiple");
 
-        Arguments mixed_ownership{"nixlbench",
-                                  "scenario",
-                                  "allocate-once",
-                                  "--file-size",
-                                  "1MiB",
-                                  "--block-size",
-                                  "4KiB",
-                                  "posix",
-                                  "--path",
-                                  "/tmp",
-                                  "--filenames",
-                                  "/tmp/a"};
+        testArguments mixed_ownership{"nixlbench",
+                                      "scenario",
+                                      "allocate-once",
+                                      "--file-size",
+                                      "1MiB",
+                                      "--block-size",
+                                      "4KiB",
+                                      "posix",
+                                      "--path",
+                                      "/tmp",
+                                      "--filenames",
+                                      "/tmp/a"};
         expect_failure(mixed_ownership, "mutually exclusive");
 
-        Arguments unsupported_memory{"nixlbench",
-                                     "scenario",
-                                     "allocate-once",
-                                     "--file-size",
-                                     "1MiB",
-                                     "--block-size",
-                                     "4KiB",
-                                     "--initiator-memory",
-                                     "vram",
-                                     "posix"};
+        testArguments unsupported_memory{"nixlbench",
+                                         "scenario",
+                                         "allocate-once",
+                                         "--file-size",
+                                         "1MiB",
+                                         "--block-size",
+                                         "4KiB",
+                                         "--initiator-memory",
+                                         "vram",
+                                         "posix"};
         expect_failure(unsupported_memory, "does not advertise VRAM_SEG");
+
+        testArguments sequential_with_seed{"nixlbench",
+                                           "scenario",
+                                           "allocate-once",
+                                           "--file-size",
+                                           "1MiB",
+                                           "--block-size",
+                                           "4KiB",
+                                           "--randomize-location-mode",
+                                           "none",
+                                           "--seed",
+                                           "7",
+                                           "posix"};
+        expect_failure(sequential_with_seed, "--seed requires");
     }
 
     TEST(ScenarioParserTest, ExplicitMemoryDoesNotSilentlyFallBack) {
-        Arguments arguments{"nixlbench",
-                            "scenario",
-                            "allocate-once",
-                            "--file-size",
-                            "1MiB",
-                            "--block-size",
-                            "4KiB",
-                            "--initiator-memory",
-                            "dram",
-                            "future-file"};
-        AllocateOnceRequest request;
-        bool help = false;
+        testArguments arguments{"nixlbench",
+                                "scenario",
+                                "allocate-once",
+                                "--file-size",
+                                "1MiB",
+                                "--block-size",
+                                "4KiB",
+                                "--initiator-memory",
+                                "dram",
+                                "future-file"};
         std::ostringstream out;
         std::ostringstream err;
 
-        ASSERT_EQ(parse(arguments, {futureFileMetadata()}, request, out, err, help), 0)
-            << err.str();
-        EXPECT_EQ(request.initiator_memory, DRAM_SEG);
+        auto result = parse(arguments, {futureFileMetadata()}, out, err);
+        ASSERT_EQ(result.status, 0) << err.str();
+        EXPECT_NE(out.str().find("initiator memory: DRAM"), std::string::npos);
     }
 
     TEST(ScenarioPlanTest, SeparatesDatasetSizeFromBoundedTransferMemory) {
-        AllocateOnceRequest request;
-        request.plugin_name = "POSIX";
-        request.plugin_parameters = {{"ios_pool_size", "4096"}};
-        request.file_size = 1024 * 1024;
-        request.block_size = 4096;
-        request.batch_size = 4;
-        request.threads = 3;
+        allocateOnceRequest request;
+        request.common.pluginName = "POSIX";
+        request.common.pluginParameters = {{"ios_pool_size", "4096"}};
+        request.fileSize = 1024 * 1024;
+        request.common.blockSize = 4096;
+        request.common.batchSize = 4;
+        request.common.threads = 3;
         request.files = {"/tmp/nixlbench_allocate_once_0.dat"};
-        request.initiator_memory = DRAM_SEG;
-        request.dry_run = true;
+        request.common.initiatorMemory = DRAM_SEG;
+        request.common.dryRun = true;
 
         EXPECT_EQ(allocateOnceWorkingMemory(request), 3U * 4U * 4096U);
 
+        testArguments arguments{"nixlbench",
+                                "scenario",
+                                "allocate-once",
+                                "--file-size",
+                                "1MiB",
+                                "--block-size",
+                                "4KiB",
+                                "--batch-size",
+                                "4",
+                                "--threads",
+                                "3",
+                                "--dry-run",
+                                "posix"};
         std::ostringstream out;
-        printAllocateOncePlan(request, out);
+        std::ostringstream err;
+        const auto result = parse(arguments, {posixMetadata()}, out, err);
+        ASSERT_EQ(result.status, 0) << err.str();
         EXPECT_NE(out.str().find("size per file: 1 MiB"), std::string::npos);
         EXPECT_NE(out.str().find("working memory: 48 KiB"), std::string::npos);
         EXPECT_NE(out.str().find("open, allocate, and register once"), std::string::npos);
@@ -246,18 +275,38 @@ namespace {
     }
 
     TEST(ScenarioPlanTest, MapsWorkloadIntentIntoTheSharedWorkerConfiguration) {
-        AllocateOnceRequest request;
-        request.plugin_name = "FUTURE-FILE";
-        request.file_size = 1024 * 1024;
-        request.block_size = 4096;
-        request.batch_size = 4;
-        request.threads = 2;
-        request.iterations = 7;
-        request.warmup_iterations = 3;
-        request.files = {"/tmp/file-0", "/tmp/file-1"};
-        request.initiator_memory = VRAM_SEG;
+        testArguments command{"nixlbench",
+                              "scenario",
+                              "allocate-once",
+                              "--file-size",
+                              "1MiB",
+                              "--block-size",
+                              "4KiB",
+                              "--batch-size",
+                              "4",
+                              "--threads",
+                              "2",
+                              "--iterations",
+                              "7",
+                              "--warmup-iterations",
+                              "3",
+                              "future-file",
+                              "--num-files",
+                              "2"};
+        std::ostringstream out;
+        std::ostringstream err;
+        auto result = parse(command, {futureFileMetadata()}, out, err);
+        ASSERT_EQ(result.status, 0) << err.str();
+        const auto config = result.scenario->legacyWorkerConfiguration();
+        EXPECT_EQ(config.common.pluginName, "FUTURE-FILE");
+        EXPECT_EQ(config.common.initiatorMemory, VRAM_SEG);
+        EXPECT_EQ(config.targetMemory, FILE_SEG);
+        EXPECT_EQ(config.workingMemory, 32768U);
+        EXPECT_TRUE(config.recreateTransferRequest);
+        EXPECT_EQ(config.fileNames.size(), 2U);
+        EXPECT_EQ(config.randomizeLocationMode, XFERBENCH_RANDOMIZE_LOCATION_MODE_BLOCK_ALIGNED);
 
-        const auto arguments = allocateOnceBenchmarkArguments(request, "nixlbench");
+        const auto arguments = legacyWorkerArguments(config, "nixlbench");
         const auto contains = [&](const std::string &argument) {
             return std::find(arguments.begin(), arguments.end(), argument) != arguments.end();
         };
@@ -268,6 +317,7 @@ namespace {
         EXPECT_TRUE(contains("--num_iter=14"));
         EXPECT_TRUE(contains("--warmup_iter=6"));
         EXPECT_TRUE(contains("--recreate_xfer=true"));
+        EXPECT_TRUE(contains("--randomize_location_mode=blockaligned"));
     }
 
 } // namespace

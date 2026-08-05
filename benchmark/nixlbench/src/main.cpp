@@ -19,10 +19,9 @@
 #include <iostream>
 #include <nixl.h>
 #include <sys/time.h>
-#include "utils/allocate_once.h"
 #include "utils/utils.h"
 #include "utils/raw_cli.h"
-#include "utils/scenario_cli.h"
+#include "benchmark/scenario.h"
 #include "utils/scope_guard.h"
 #include "worker/nixl/nixl_worker.h"
 #if HAVE_NVSHMEM && HAVE_CUDA
@@ -33,7 +32,8 @@
 #include <optional>
 #include <csignal>
 
-static std::pair<size_t, size_t> getStrideScheme(xferBenchWorker &worker, int num_threads) {
+static std::pair<size_t, size_t>
+getStrideScheme(xferBenchWorker &worker, int num_threads) {
     int initiator_device, target_device;
     size_t buffer_size, count, stride;
 
@@ -76,15 +76,16 @@ static std::pair<size_t, size_t> getStrideScheme(xferBenchWorker &worker, int nu
     return std::make_pair(count, stride);
 }
 
-static std::vector<std::vector<xferBenchIOV>> createTransferDescLists(xferBenchWorker &worker,
-                                                                      std::vector<std::vector<xferBenchIOV>> &iov_lists,
-                                                                      size_t block_size,
-                                                                      size_t batch_size,
-                                                                      int num_threads) {
+static std::vector<std::vector<xferBenchIOV>>
+createTransferDescLists(xferBenchWorker &worker,
+                        std::vector<std::vector<xferBenchIOV>> &iov_lists,
+                        size_t block_size,
+                        size_t batch_size,
+                        int num_threads) {
     auto [count, stride] = getStrideScheme(worker, num_threads);
     std::vector<std::vector<xferBenchIOV>> xfer_lists;
 
-    for (const auto &iov_list: iov_lists) {
+    for (const auto &iov_list : iov_lists) {
         std::vector<xferBenchIOV> xfer_list;
 
         for (const auto &iov : iov_list) {
@@ -111,12 +112,13 @@ static std::vector<std::vector<xferBenchIOV>> createTransferDescLists(xferBenchW
     return xfer_lists;
 }
 
-static int processBatchSizes(xferBenchWorker &worker,
-                             std::vector<std::vector<xferBenchIOV>> &iov_lists,
-                             size_t block_size, int num_threads) {
+static int
+processBatchSizes(xferBenchWorker &worker,
+                  std::vector<std::vector<xferBenchIOV>> &iov_lists,
+                  size_t block_size,
+                  int num_threads) {
     for (size_t batch_size = xferBenchConfig::start_batch_size;
-         !worker.signaled() &&
-             batch_size <= xferBenchConfig::max_batch_size;
+         !worker.signaled() && batch_size <= xferBenchConfig::max_batch_size;
          batch_size *= 2) {
         size_t effective_batch = batch_size * xferBenchConfig::pipeline_depth;
         auto local_trans_lists =
@@ -162,16 +164,14 @@ static int processBatchSizes(xferBenchWorker &worker,
 
 namespace {
 std::unique_ptr<xferBenchWorker>
-createWorker(const std::optional<nixl_b_params_t> &plugin_parameters,
-             std::optional<nixlbench::AllocateOnceRequest> allocate_once = std::nullopt) {
+createWorker(const std::optional<nixl_b_params_t> &plugin_parameters) {
     if (xferBenchConfig::worker_type == XFERBENCH_WORKER_NIXL) {
         std::vector<std::string> devices = xferBenchConfig::parseDeviceList();
         if (devices.empty()) {
             std::cerr << "Failed to parse device list" << std::endl;
             return nullptr;
         }
-        return std::make_unique<xferBenchNixlWorker>(
-            devices, plugin_parameters, std::move(allocate_once));
+        return std::make_unique<xferBenchNixlWorker>(devices, plugin_parameters);
     } else if (xferBenchConfig::worker_type == XFERBENCH_WORKER_NVSHMEM) {
 #if HAVE_NVSHMEM && HAVE_CUDA
         return std::make_unique<xferBenchNvshmemWorker>();
@@ -188,13 +188,14 @@ createWorker(const std::optional<nixl_b_params_t> &plugin_parameters,
 
 static int
 runBenchmark(const std::optional<nixl_b_params_t> &plugin_parameters = std::nullopt,
-             std::optional<nixlbench::AllocateOnceRequest> allocate_once = std::nullopt) {
+             std::unique_ptr<xferBenchWorker> worker_ptr = nullptr) {
     int ret = 0;
     int num_threads = xferBenchConfig::num_threads;
 
     // Create the appropriate worker based on worker configuration
-    std::unique_ptr<xferBenchWorker> worker_ptr =
-        createWorker(plugin_parameters, std::move(allocate_once));
+    if (!worker_ptr) {
+        worker_ptr = createWorker(plugin_parameters);
+    }
     if (!worker_ptr) {
         return EXIT_FAILURE;
     }
@@ -213,9 +214,7 @@ runBenchmark(const std::optional<nixl_b_params_t> &plugin_parameters = std::null
     if (iov_lists.empty()) {
         return EXIT_FAILURE;
     }
-    auto mem_guard = make_scope_guard ([&] {
-        worker_ptr->deallocateMemory(iov_lists);
-    });
+    auto mem_guard = make_scope_guard([&] { worker_ptr->deallocateMemory(iov_lists); });
 
     ret = worker_ptr->exchangeMetadata();
     if (0 != ret) {
@@ -230,8 +229,7 @@ runBenchmark(const std::optional<nixl_b_params_t> &plugin_parameters = std::null
     }
 
     for (size_t block_size = xferBenchConfig::start_block_size;
-         !worker_ptr->signaled() &&
-         block_size <= xferBenchConfig::max_block_size;
+         !worker_ptr->signaled() && block_size <= xferBenchConfig::max_block_size;
          block_size *= 2) {
         ret = processBatchSizes(*worker_ptr, iov_lists, block_size, num_threads);
         if (0 != ret) {
@@ -250,14 +248,12 @@ runBenchmark(const std::optional<nixl_b_params_t> &plugin_parameters = std::null
 int
 main(int argc, char *argv[]) {
     if (nixlbench::isScenarioCommand(argc, argv)) {
-        const auto result = nixlbench::prepareScenarioCommand(argc, argv, std::cout, std::cerr);
+        auto result = nixlbench::prepareScenarioCommand(argc, argv, std::cout, std::cerr);
         if (result.status != EXIT_SUCCESS || !result.execute) {
             return result.status;
         }
-        if (!nixlbench::prepareAllocateOnceFiles(*result.request, std::cerr)) {
-            return EXIT_FAILURE;
-        }
-        auto arguments = nixlbench::allocateOnceBenchmarkArguments(*result.request, argv[0]);
+        const auto worker_configuration = result.scenario->legacyWorkerConfiguration();
+        auto arguments = nixlbench::legacyWorkerArguments(worker_configuration, argv[0]);
         std::vector<char *> argument_pointers;
         argument_pointers.reserve(arguments.size());
         for (auto &argument : arguments) {
@@ -267,8 +263,21 @@ main(int argc, char *argv[]) {
                                          argument_pointers.data()) != EXIT_SUCCESS) {
             return EXIT_FAILURE;
         }
-        const auto plugin_parameters = result.request->plugin_parameters;
-        return runBenchmark(plugin_parameters, std::move(*result.request));
+        const auto plugin_parameters = worker_configuration.common.pluginParameters;
+        auto devices = xferBenchConfig::parseDeviceList();
+        if (devices.empty()) {
+            std::cerr << "Failed to parse device list" << std::endl;
+            return EXIT_FAILURE;
+        }
+        if (!result.scenario->prepare(std::cerr)) {
+            return EXIT_FAILURE;
+        }
+        auto worker = result.scenario->createWorker(devices);
+        if (!worker) {
+            std::cerr << "Failed to create scenario worker" << std::endl;
+            return EXIT_FAILURE;
+        }
+        return runBenchmark(plugin_parameters, std::move(worker));
     }
 
     if (nixlbench::isRawCommand(argc, argv)) {
@@ -276,7 +285,7 @@ main(int argc, char *argv[]) {
         if (result.status != EXIT_SUCCESS || !result.execute) {
             return result.status;
         }
-        return runBenchmark(result.plugin_parameters);
+        return runBenchmark(result.pluginParameters);
     }
 
     // Preserve the flags-only interface for invocations outside the explicit command hierarchies.

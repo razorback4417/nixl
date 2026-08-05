@@ -19,9 +19,9 @@
 namespace nixlbench {
 namespace {
 
-    class TemporaryDirectory {
+    class temporaryDirectory {
     public:
-        TemporaryDirectory() {
+        temporaryDirectory() {
             const auto base = std::filesystem::temp_directory_path() / "nixlbench-pr1-XXXXXX";
             std::string pattern = base.string();
             pattern.push_back('\0');
@@ -31,7 +31,7 @@ namespace {
             }
         }
 
-        ~TemporaryDirectory() {
+        ~temporaryDirectory() {
             std::error_code error;
             std::filesystem::remove_all(path_, error);
         }
@@ -99,7 +99,7 @@ namespace {
     }
 
     TEST(PosixIntegrationTest, RawPosixHelpShowsAdvertisedPluginParameterDefaults) {
-        TemporaryDirectory directory;
+        temporaryDirectory directory;
         ASSERT_FALSE(directory.path().empty());
         const auto log = directory.path() / "help.log";
         EXPECT_EQ(runCommand("raw posix --help", log), 0);
@@ -116,7 +116,7 @@ namespace {
     }
 
     TEST(PosixIntegrationTest, DryRunDoesNotCreateFiles) {
-        TemporaryDirectory directory;
+        temporaryDirectory directory;
         ASSERT_FALSE(directory.path().empty());
         const auto log = directory.path() / "dry-run.log";
         EXPECT_EQ(runCommand(smallRawCommand(directory.path(), "write") + " --dry-run", log), 0);
@@ -131,7 +131,7 @@ namespace {
     }
 
     TEST(PosixIntegrationTest, DryRunShowsRequestedAndNormalizedIterations) {
-        TemporaryDirectory directory;
+        temporaryDirectory directory;
         ASSERT_FALSE(directory.path().empty());
         const auto log = directory.path() / "normalized-dry-run.log";
         const std::string command = "raw posix --path " + shellQuote(directory.path().string()) +
@@ -148,8 +148,8 @@ namespace {
     }
 
     TEST(PosixIntegrationTest, RawWriteReadAndPluginOverridePassConsistencyChecks) {
-        TemporaryDirectory write_directory;
-        TemporaryDirectory read_directory;
+        temporaryDirectory write_directory;
+        temporaryDirectory read_directory;
         const auto write_log = write_directory.path() / "write.log";
         ASSERT_EQ(runCommand(smallRawCommand(write_directory.path(), "write") +
                                  " --plugin-param ios_pool_size 4096",
@@ -168,8 +168,8 @@ namespace {
     }
 
     TEST(PosixIntegrationTest, LegacyAndRawEquivalentWriteConfigurationsBothPass) {
-        TemporaryDirectory legacy_directory;
-        TemporaryDirectory raw_directory;
+        temporaryDirectory legacy_directory;
+        temporaryDirectory raw_directory;
         const auto legacy_log = legacy_directory.path() / "legacy.log";
         const auto raw_log = raw_directory.path() / "raw.log";
         EXPECT_EQ(runCommand(smallLegacyCommand(legacy_directory.path()), legacy_log), 0);
@@ -204,7 +204,7 @@ namespace {
             GTEST_SKIP() << "Fewer than two POSIX I/O queue selectors are available";
         }
 
-        TemporaryDirectory directory;
+        temporaryDirectory directory;
         ASSERT_FALSE(directory.path().empty());
         const auto log = directory.path() / "conflicting-selectors.log";
         const std::string command = smallRawCommand(directory.path(), "write") +
@@ -216,7 +216,7 @@ namespace {
     }
 
     TEST(PosixIntegrationTest, FailuresRespectOwnershipAndLeaveNoBenchmarkFiles) {
-        TemporaryDirectory invalid_directory;
+        temporaryDirectory invalid_directory;
         const auto invalid_log = invalid_directory.path() / "invalid.log";
         EXPECT_NE(
             runCommand(smallRawCommand(invalid_directory.path(), "write") + " --gds-batch-limit 4",
@@ -224,7 +224,7 @@ namespace {
             0);
         EXPECT_EQ(regularFileCount(invalid_directory.path()), 1U);
 
-        TemporaryDirectory plugin_directory;
+        temporaryDirectory plugin_directory;
         const auto plugin_log = plugin_directory.path() / "plugin.log";
         EXPECT_NE(runCommand(smallRawCommand(plugin_directory.path(), "write") +
                                  " --plugin-param ios_pool_size not-a-number",
@@ -235,7 +235,7 @@ namespace {
         EXPECT_NE(plugin_contents.find("ios_pool_size: not-a-number"), std::string::npos);
         EXPECT_EQ(plugin_contents.find("invalid value for --ios_pool_size"), std::string::npos);
 
-        TemporaryDirectory failure_directory;
+        temporaryDirectory failure_directory;
         const auto failure_log = failure_directory.path() / "failure.log";
         const auto missing_file = failure_directory.path() / "missing" / "file";
         const std::string command = "raw posix --filenames " + shellQuote(missing_file.string()) +

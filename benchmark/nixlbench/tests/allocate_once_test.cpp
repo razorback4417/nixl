@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "utils/scenario_cli.h"
+#include "benchmark/allocate_once.h"
 
 #include <gtest/gtest.h>
 
@@ -14,31 +14,31 @@ namespace nixlbench {
 namespace {
 
     TEST(AllocateOnceRegionsTest, AssignsThreadsRoundRobinToDisjointFilePartitions) {
-        AllocateOnceRequest request;
-        request.file_size = 10 * 4096;
-        request.block_size = 4096;
-        request.batch_size = 2;
-        request.threads = 4;
+        allocateOnceRequest request;
+        request.fileSize = 10 * 4096;
+        request.common.blockSize = 4096;
+        request.common.batchSize = 2;
+        request.common.threads = 4;
         request.files = {"/tmp/file-0", "/tmp/file-1"};
 
         std::string error;
         const auto regions = allocateOnceThreadRegions(request, error);
         ASSERT_TRUE(regions) << error;
         ASSERT_EQ(regions->size(), 4U);
-        EXPECT_EQ((*regions)[0].file_index, 0U);
-        EXPECT_EQ((*regions)[1].file_index, 1U);
-        EXPECT_EQ((*regions)[2].file_index, 0U);
-        EXPECT_EQ((*regions)[3].file_index, 1U);
-        EXPECT_EQ((*regions)[0].first_slot, 0U);
-        EXPECT_EQ((*regions)[0].slot_count, 5U);
-        EXPECT_EQ((*regions)[2].first_slot, 5U);
-        EXPECT_EQ((*regions)[2].slot_count, 5U);
+        EXPECT_EQ((*regions)[0].fileIndex, 0U);
+        EXPECT_EQ((*regions)[1].fileIndex, 1U);
+        EXPECT_EQ((*regions)[2].fileIndex, 0U);
+        EXPECT_EQ((*regions)[3].fileIndex, 1U);
+        EXPECT_EQ((*regions)[0].firstSlot, 0U);
+        EXPECT_EQ((*regions)[0].slotCount, 5U);
+        EXPECT_EQ((*regions)[2].firstSlot, 5U);
+        EXPECT_EQ((*regions)[2].slotCount, 5U);
     }
 
     TEST(OffsetSequenceTest, RandomBatchesAreSeededUniqueAndRemainInTheThreadRegion) {
-        const ThreadFileRegion region{0, 10, 8};
-        OffsetSequence first(region, 4, OffsetMode::Random, 1234);
-        OffsetSequence second(region, 4, OffsetMode::Random, 1234);
+        const threadFileRegion region{0, 10, 8};
+        offsetSequence first(region, 4, XFERBENCH_RANDOMIZE_LOCATION_MODE_BLOCK_ALIGNED, 1234);
+        offsetSequence second(region, 4, XFERBENCH_RANDOMIZE_LOCATION_MODE_BLOCK_ALIGNED, 1234);
 
         const auto first_batch = first.next();
         const auto second_batch = second.next();
@@ -51,15 +51,15 @@ namespace {
     }
 
     TEST(OffsetSequenceTest, SequentialBatchesWrapInsideTheThreadRegion) {
-        OffsetSequence offsets({0, 7, 5}, 3, OffsetMode::Sequential, 0);
+        offsetSequence offsets({0, 7, 5}, 3, XFERBENCH_RANDOMIZE_LOCATION_MODE_NONE, 0);
         EXPECT_EQ(offsets.next(), (std::vector<uint64_t>{7, 8, 9}));
         EXPECT_EQ(offsets.next(), (std::vector<uint64_t>{10, 11, 7}));
     }
 
     TEST(AllocateOnceFileNamesTest, ManagedNamesAreScenarioOwnedAndDeterministic) {
-        FileOptions file;
+        fileOptions file;
         file.path = "/tmp/scenario";
-        file.num_files = 2;
+        file.numFiles = 2;
 
         const auto names = allocateOnceFileNames(file);
         ASSERT_EQ(names.size(), 2U);
@@ -68,9 +68,9 @@ namespace {
     }
 
     TEST(AllocateOnceFileNamesTest, PreservesExplicitFileNames) {
-        FileOptions file;
+        fileOptions file;
         file.filenames = "/tmp/name one,/tmp/name-two";
-        file.num_files = 2;
+        file.numFiles = 2;
 
         const auto names = allocateOnceFileNames(file);
         ASSERT_EQ(names.size(), 2U);

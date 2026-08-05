@@ -19,11 +19,11 @@
 namespace nixlbench {
 namespace {
 
-    std::optional<PluginMetadata>
+    std::optional<pluginMetadata>
     queryPluginMetadata(nixlAgent &agent, const std::string &name, std::string &error) {
-        PluginMetadata metadata;
+        pluginMetadata metadata;
         metadata.name = name;
-        const auto status = agent.getPluginParams(name, metadata.memory_types, metadata.parameters);
+        const auto status = agent.getPluginParams(name, metadata.memoryTypes, metadata.parameters);
         if (status != NIXL_SUCCESS) {
             error = "failed to query " + name +
                 " plugin metadata: " + nixlEnumStrings::statusStr(status);
@@ -90,18 +90,18 @@ parseHumanSize(const std::string &input, std::string &error) {
 }
 
 bool
-hasMemoryType(const PluginMetadata &metadata, nixl_mem_t memory_type) {
-    return std::find(metadata.memory_types.begin(), metadata.memory_types.end(), memory_type) !=
-        metadata.memory_types.end();
+hasMemoryType(const pluginMetadata &metadata, nixl_mem_t memory_type) {
+    return std::find(metadata.memoryTypes.begin(), metadata.memoryTypes.end(), memory_type) !=
+        metadata.memoryTypes.end();
 }
 
 bool
-validateFileOptions(const FileOptions &file, std::string &error) {
+validateFileOptions(const fileOptions &file, std::string &error) {
     if (!file.path.empty() && !file.filenames.empty()) {
         error = "--path and --filenames are mutually exclusive";
         return false;
     }
-    if (file.num_files < 1) {
+    if (file.numFiles < 1) {
         error = "--num-files must be at least 1";
         return false;
     }
@@ -112,7 +112,7 @@ validateFileOptions(const FileOptions &file, std::string &error) {
         return false;
     }
     if (!file.filenames.empty() &&
-        splitFileNames(file.filenames).size() != static_cast<size_t>(file.num_files)) {
+        splitFileNames(file.filenames).size() != static_cast<size_t>(file.numFiles)) {
         error = "--filenames must contain exactly --num-files entries";
         return false;
     }
@@ -145,7 +145,7 @@ formatSize(size_t bytes) {
     return output.str();
 }
 
-std::optional<PluginMetadata>
+std::optional<pluginMetadata>
 discoverPluginMetadata(const std::string &name, std::string &error) {
     nixlAgent agent("nixlbench-cli", nixlAgentConfig{});
     std::vector<nixl_backend_t> plugins;
@@ -161,7 +161,7 @@ discoverPluginMetadata(const std::string &name, std::string &error) {
     return queryPluginMetadata(agent, name, error);
 }
 
-std::optional<std::vector<PluginMetadata>>
+std::optional<std::vector<pluginMetadata>>
 discoverPluginMetadata(std::string &error) {
     nixlAgent agent("nixlbench-cli", nixlAgentConfig{});
     std::vector<nixl_backend_t> plugins;
@@ -172,7 +172,7 @@ discoverPluginMetadata(std::string &error) {
     }
 
     std::sort(plugins.begin(), plugins.end());
-    std::vector<PluginMetadata> metadata;
+    std::vector<pluginMetadata> metadata;
     metadata.reserve(plugins.size());
     for (const auto &plugin : plugins) {
         std::string plugin_error;
@@ -186,13 +186,13 @@ discoverPluginMetadata(std::string &error) {
     return metadata;
 }
 
-std::optional<std::vector<PluginMetadata>>
+std::optional<std::vector<pluginMetadata>>
 discoverPluginsWithMemoryType(nixl_mem_t memory_type, std::string &error) {
     auto metadata = discoverPluginMetadata(error);
     if (!metadata) {
         return std::nullopt;
     }
-    std::erase_if(*metadata, [memory_type](const PluginMetadata &plugin) {
+    std::erase_if(*metadata, [memory_type](const pluginMetadata &plugin) {
         return !hasMemoryType(plugin, memory_type);
     });
     return metadata;

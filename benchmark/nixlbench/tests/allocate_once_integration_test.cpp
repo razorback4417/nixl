@@ -18,9 +18,9 @@
 namespace nixlbench {
 namespace {
 
-    class ScenarioTemporaryDirectory {
+    class scenarioTemporaryDirectory {
     public:
-        ScenarioTemporaryDirectory() {
+        scenarioTemporaryDirectory() {
             const auto base = std::filesystem::temp_directory_path() / "nixlbench-pr2-XXXXXX";
             std::string pattern = base.string();
             pattern.push_back('\0');
@@ -30,7 +30,7 @@ namespace {
             }
         }
 
-        ~ScenarioTemporaryDirectory() {
+        ~scenarioTemporaryDirectory() {
             std::error_code error;
             std::filesystem::remove_all(path_, error);
         }
@@ -89,7 +89,7 @@ namespace {
     }
 
     TEST(AllocateOnceIntegrationTest, DiscoveryReportsUnreadablePluginMetadata) {
-        ScenarioTemporaryDirectory directory;
+        scenarioTemporaryDirectory directory;
         ASSERT_FALSE(directory.path().empty());
         const auto log = directory.path() / "help.log";
         const char *plugin_directory = std::getenv("NIXL_PLUGIN_DIR");
@@ -105,7 +105,7 @@ namespace {
     }
 
     TEST(AllocateOnceIntegrationTest, DryRunDoesNotCreateOrOpenManagedFiles) {
-        ScenarioTemporaryDirectory directory;
+        scenarioTemporaryDirectory directory;
         ASSERT_FALSE(directory.path().empty());
         const auto log = directory.path() / "dry-run.log";
         const auto dataset = directory.path() / "nixlbench_allocate_once_0.dat";
@@ -119,7 +119,7 @@ namespace {
     }
 
     TEST(AllocateOnceIntegrationTest, ManagedDatasetIsCreatedOnceAndReusedForRead) {
-        ScenarioTemporaryDirectory directory;
+        scenarioTemporaryDirectory directory;
         ASSERT_FALSE(directory.path().empty());
         const auto write_log = directory.path() / "write.log";
         const auto read_log = directory.path() / "read.log";
@@ -142,7 +142,7 @@ namespace {
     }
 
     TEST(AllocateOnceIntegrationTest, ManagedWrongSizeFileIsReinitializedToTheRequestedSize) {
-        ScenarioTemporaryDirectory directory;
+        scenarioTemporaryDirectory directory;
         ASSERT_FALSE(directory.path().empty());
         const auto dataset = directory.path() / "nixlbench_allocate_once_0.dat";
         {
@@ -157,7 +157,7 @@ namespace {
     }
 
     TEST(AllocateOnceIntegrationTest, ExplicitFileOwnershipAndIdentityArePreserved) {
-        ScenarioTemporaryDirectory directory;
+        scenarioTemporaryDirectory directory;
         ASSERT_FALSE(directory.path().empty());
         const auto missing = directory.path() / "missing.dat";
         const auto missing_log = directory.path() / "missing.log";
@@ -193,7 +193,7 @@ namespace {
 
         const auto write_log = directory.path() / "write.log";
         const std::string write_command = prefix + scenarioShellQuote(existing_file.string()) +
-            " --operation write --offset-mode sequential --batch-size 2 --iterations 2 "
+            " --operation write --randomize-location-mode none --batch-size 2 --iterations 2 "
             "--warmup-iterations 0 --initiator-memory dram";
         ASSERT_EQ(runScenarioCommand(write_command, write_log), 0) << readScenarioLog(write_log);
         std::ifstream existing_stream(existing_file, std::ios::binary);
@@ -223,7 +223,7 @@ namespace {
     }
 
     TEST(AllocateOnceIntegrationTest, ManagedFilesDoNotFollowExistingSymbolicLinks) {
-        ScenarioTemporaryDirectory directory;
+        scenarioTemporaryDirectory directory;
         ASSERT_FALSE(directory.path().empty());
         const auto victim = directory.path() / "victim.dat";
         {

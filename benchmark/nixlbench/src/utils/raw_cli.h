@@ -20,32 +20,32 @@
 
 namespace nixlbench {
 
-struct RawOptions {
+struct rawOptions {
     std::string operation = "WRITE";
-    size_t total_buffer_size = 8ULL * 1024 * 1024 * 1024;
-    size_t start_block_size = 4ULL * 1024;
-    size_t max_block_size = 64ULL * 1024 * 1024;
-    size_t start_batch_size = 1;
-    size_t max_batch_size = 1;
+    size_t totalBufferSize = 8ULL * 1024 * 1024 * 1024;
+    size_t startBlockSize = 4ULL * 1024;
+    size_t maxBlockSize = 64ULL * 1024 * 1024;
+    size_t startBatchSize = 1;
+    size_t maxBatchSize = 1;
     int iterations = 1000;
-    int warmup_iterations = 100;
+    int warmupIterations = 100;
     int threads = 1;
-    int pipeline_depth = 1;
-    bool check_consistency = false;
-    bool dry_run = false;
+    int pipelineDepth = 1;
+    bool checkConsistency = false;
+    bool dryRun = false;
 };
 
-struct RawPosixRequest {
-    RawOptions raw;
-    FileOptions file;
-    bool has_file_options = false;
-    nixl_b_params_t plugin_parameters;
+struct rawPosixRequest {
+    rawOptions raw;
+    fileOptions file;
+    bool hasFileOptions = false;
+    nixl_b_params_t pluginParameters;
 };
 
-struct RawCommandResult {
+struct rawCommandResult {
     int status = EXIT_SUCCESS;
     bool execute = false;
-    std::optional<nixl_b_params_t> plugin_parameters;
+    std::optional<nixl_b_params_t> pluginParameters;
 };
 
 bool
@@ -54,8 +54,8 @@ isRawCommand(int argc, char *argv[]);
 int
 parseRawPosixCommand(int argc,
                      char *argv[],
-                     const PluginMetadata &metadata,
-                     RawPosixRequest &request,
+                     const pluginMetadata &metadata,
+                     rawPosixRequest &request,
                      bool &help_requested,
                      std::ostream &out,
                      std::ostream &err);
@@ -63,23 +63,23 @@ parseRawPosixCommand(int argc,
 int
 parseRawCommand(int argc,
                 char *argv[],
-                const std::vector<PluginMetadata> &file_plugins,
-                RawPosixRequest &request,
+                const std::vector<pluginMetadata> &file_plugins,
+                rawPosixRequest &request,
                 bool &help_requested,
                 std::ostream &out,
                 std::ostream &err);
 
 std::vector<std::string>
-benchmarkFileArguments(const RawPosixRequest &request, const std::string &program_name);
+benchmarkFileArguments(const rawPosixRequest &request, const std::string &program_name);
 
 void
-printRawPosixPlan(const RawPosixRequest &request,
-                  const PluginMetadata &metadata,
+printRawPosixPlan(const rawPosixRequest &request,
+                  const pluginMetadata &metadata,
                   int normalized_iterations,
                   int normalized_warmup_iterations,
                   std::ostream &out);
 
-RawCommandResult
+rawCommandResult
 prepareRawCommand(int argc, char *argv[], std::ostream &out, std::ostream &err);
 
 } // namespace nixlbench

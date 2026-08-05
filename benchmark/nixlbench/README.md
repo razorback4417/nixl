@@ -392,6 +392,78 @@ export LD_LIBRARY_PATH=/usr/local/nixlbench/lib:$LD_LIBRARY_PATH
 
 ### Verb-based interface
 
+#### Allocate-once storage scenario
+
+`scenario allocate-once` models a fixed file-backed dataset with changing
+block-aligned transfer offsets. NIXLBench discovers compatible installed
+plugins from their advertised memory types: the plugin must support `FILE_SEG`
+and at least one of `DRAM_SEG` or `VRAM_SEG`. Adding another compatible storage
+plugin therefore does not require a NIXLBench code change.
+
+```bash
+# Create the directory used by the managed-file examples
+mkdir -p /tmp/nixlbench-data
+
+# Discover the compatible plugins installed on this system
+nixlbench scenario allocate-once --help
+
+# Inspect the resolved plan without opening backing files or creating transfer resources
+nixlbench scenario allocate-once posix \
+  --path /tmp/nixlbench-data \
+  --file-size 64GiB \
+  --block-size 64KiB \
+  --batch-size 16 \
+  --threads 4 \
+  --dry-run
+
+# Reuse two registered files across four threads and changing random offsets
+nixlbench scenario allocate-once gds \
+  --path /tmp/nixlbench-data \
+  --file-size 64GiB \
+  --block-size 64KiB \
+  --batch-size 16 \
+  --threads 4 \
+  --num-files 2 \
+  --iterations 1000 \
+  --randomize-location-mode blockaligned \
+  --seed 42
+```
+
+Scenario options may appear before or after the plugin subcommand. Automatic
+memory selection prefers `VRAM_SEG` when the selected plugin advertises it and
+otherwise uses `DRAM_SEG`; an explicit `--initiator-memory` request fails
+instead of falling back.
+
+NIXLBench-managed files use deterministic names under `--path`. Missing or
+wrong-sized managed files are initialized in bounded chunks and retained after
+the run; exact-sized files are reused. With `--filenames`, every file must
+already exist and NIXLBench never creates, resizes, or deletes it.
+
+The scenario owns the open/register-once lifecycle through an allocate-once
+worker strategy built on the common NIXL worker facilities. Generic scenario
+dispatch and the common worker do not contain allocate-once branches. Common
+scenario options, plugin subcommands, metadata parameters, and legacy worker
+translation are defined once. A new scenario supplies only its distinct
+options, validation, lifecycle policy, and worker strategy, then adds one entry
+to the scenario registry.
+
+Each thread is assigned to a file round-robin and receives a disjoint file
+partition. Every iteration creates and releases a transfer request with either
+seeded `blockaligned` randomization or `none` for sequential offsets inside
+that partition. These names reuse the existing NIXLBench randomization modes;
+`bytealigned` is not valid for this block-oriented scenario. Transfer working
+memory is therefore `threads * batch-size * block-size`, independent of the
+file size. The shared worker reports request preparation, post, transfer
+latency, and throughput.
+`--check-consistency` is available for managed files and validates the last
+completed transfer per thread after the timed interval.
+
+Plugin initialization parameters remain opaque:
+`--plugin-param KEY VALUE` accepts only keys advertised by the selected plugin
+and forwards the value unchanged.
+
+#### Raw POSIX command
+
 NIXLBench also provides a verb-based interface. The first available command is
 `raw posix`, which runs the existing NIXLBench worker with three explicit
 ownership layers:
@@ -453,7 +525,8 @@ interprets and validates the resolved values during backend creation rather than
 through copied NIXLBench rules, so the `use_uring` example depends on that
 parameter being advertised by the installed POSIX plugin.
 
-The existing flags-only interface remains available for all other commands.
+Only explicit `raw` and `scenario` commands use CLI11. All existing flags-only
+commands keep their gflags syntax and behavior.
 
 ### ETCD Coordination Setup
 

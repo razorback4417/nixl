@@ -15,16 +15,16 @@
 
 namespace nixlbench {
 
-struct PluginMetadata {
+struct pluginMetadata {
     std::string name;
-    nixl_mem_list_t memory_types;
+    nixl_mem_list_t memoryTypes;
     nixl_b_params_t parameters;
 };
 
-struct FileOptions {
+struct fileOptions {
     std::string path;
     std::string filenames;
-    int num_files = 1;
+    int numFiles = 1;
     bool direct = false;
 };
 
@@ -32,10 +32,10 @@ std::optional<size_t>
 parseHumanSize(const std::string &value, std::string &error);
 
 bool
-hasMemoryType(const PluginMetadata &metadata, nixl_mem_t memory_type);
+hasMemoryType(const pluginMetadata &metadata, nixl_mem_t memory_type);
 
 bool
-validateFileOptions(const FileOptions &file, std::string &error);
+validateFileOptions(const fileOptions &file, std::string &error);
 
 std::vector<std::string>
 splitFileNames(const std::string &value);
@@ -43,13 +43,13 @@ splitFileNames(const std::string &value);
 std::string
 formatSize(size_t bytes);
 
-std::optional<PluginMetadata>
+std::optional<pluginMetadata>
 discoverPluginMetadata(const std::string &name, std::string &error);
 
-std::optional<std::vector<PluginMetadata>>
+std::optional<std::vector<pluginMetadata>>
 discoverPluginMetadata(std::string &error);
 
-std::optional<std::vector<PluginMetadata>>
+std::optional<std::vector<pluginMetadata>>
 discoverPluginsWithMemoryType(nixl_mem_t memory_type, std::string &error);
 
 std::vector<std::string>

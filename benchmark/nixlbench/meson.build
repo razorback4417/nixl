@@ -321,6 +321,7 @@ summary(
 subdir('src/utils')
 subdir('src/runtime')
 subdir('src/worker')
+subdir('src/benchmark')
 subdir('src/kernels')
 
 # Configure header file
@@ -390,8 +391,9 @@ if nvshmem_available
                  meson.current_build_dir() + '/src/utils/libutils.a.p/utils.cpp.o',
                  meson.current_build_dir() + '/src/utils/libutils.a.p/cli_common.cpp.o',
                  meson.current_build_dir() + '/src/utils/libutils.a.p/raw_cli.cpp.o',
-                 meson.current_build_dir() + '/src/utils/libutils.a.p/scenario_cli.cpp.o',
-                 meson.current_build_dir() + '/src/utils/libutils.a.p/allocate_once.cpp.o',
+                 meson.current_build_dir() + '/src/benchmark/libbenchmark_paths.a.p/scenario.cpp.o',
+                 meson.current_build_dir() + '/src/benchmark/libbenchmark_paths.a.p/allocate_once.cpp.o',
+                 meson.current_build_dir() + '/src/benchmark/libbenchmark_paths.a.p/allocate_once_worker.cpp.o',
                  meson.current_build_dir() + '/src/runtime/libruntime.a.p/runtime.cpp.o',
                  meson.current_build_dir() + '/src/worker/libworker.a.p/worker.cpp.o',
                  meson.current_build_dir() + '/src/worker/nixl/libnixl_worker.a.p/nixl_worker.cpp.o',
@@ -414,11 +416,11 @@ if nvshmem_available
         build_by_default: true,
         install: true,
         install_dir: get_option('bindir'),
-        depends: [nixlbench_runtimes, utils_lib, worker_libs])
+        depends: [nixlbench_runtimes, utils_lib, worker_libs, benchmark_path_lib])
 else
     nixlbench_target = executable('nixlbench', 'src/main.cpp',
                 include_directories: inc_dir,
-                link_with: [nixlbench_runtimes, utils_lib, worker_libs],
+                link_with: [nixlbench_runtimes, utils_lib, worker_libs, benchmark_path_lib],
                 dependencies: deps,
                 link_args: args,
                 install: true,

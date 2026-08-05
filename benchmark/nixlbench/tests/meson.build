@@ -16,7 +16,7 @@ nixlbench_tests = executable(
     'allocate_once_integration_test.cpp',
   ],
   include_directories: inc_dir,
-  link_with: [utils_lib, nixlbench_runtimes],
+  link_with: [utils_lib, nixlbench_runtimes, worker_libs, benchmark_path_lib],
   dependencies: deps + [gtest_dep],
   install: true,
 )
