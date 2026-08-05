@@ -142,8 +142,8 @@ etcd_dep = dependency('etcd-cpp-api', required : false)
 # GFlags
 gflags_dep = dependency('gflags', required: true)
 
-# CLI11 is used only by the explicit `raw` command hierarchy. Legacy invocations
-# continue to use gflags unchanged.
+# CLI11 is used by the explicit `raw` and `scenario` command hierarchies. Legacy
+# invocations continue to use gflags unchanged.
 cli11_dep = dependency('CLI11', required: true, fallback: ['cli11', 'CLI11_dep'])
 
 # ASIO (usually via libasio-dev package)
@@ -388,7 +388,10 @@ if nvshmem_available
     nvcc_args += args
     nvcc_cmd_files = [
                  meson.current_build_dir() + '/src/utils/libutils.a.p/utils.cpp.o',
+                 meson.current_build_dir() + '/src/utils/libutils.a.p/cli_common.cpp.o',
                  meson.current_build_dir() + '/src/utils/libutils.a.p/raw_cli.cpp.o',
+                 meson.current_build_dir() + '/src/utils/libutils.a.p/scenario_cli.cpp.o',
+                 meson.current_build_dir() + '/src/utils/libutils.a.p/allocate_once.cpp.o',
                  meson.current_build_dir() + '/src/runtime/libruntime.a.p/runtime.cpp.o',
                  meson.current_build_dir() + '/src/worker/libworker.a.p/worker.cpp.o',
                  meson.current_build_dir() + '/src/worker/nixl/libnixl_worker.a.p/nixl_worker.cpp.o',

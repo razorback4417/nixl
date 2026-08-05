@@ -135,6 +135,7 @@
 // Segment types
 #define XFERBENCH_SEG_TYPE_DRAM "DRAM"
 #define XFERBENCH_SEG_TYPE_VRAM "VRAM"
+#define XFERBENCH_SEG_TYPE_FILE "FILE"
 #define XFERBENCH_SEG_TYPE_BLK "BLK"
 
 // Worker types
@@ -395,7 +396,8 @@ public:
     rmObjS3(const std::string &name);
 
     static bool
-    checkConsistency(std::vector<std::vector<xferBenchIOV>> &desc_lists);
+    checkConsistency(std::vector<std::vector<xferBenchIOV>> &desc_lists,
+                     std::optional<uint8_t> expected_value = std::nullopt);
     static bool
     validateTransfer(bool is_initiator,
                      std::vector<std::vector<xferBenchIOV>> &local_lists,

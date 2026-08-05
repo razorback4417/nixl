@@ -18,8 +18,14 @@ utils_sources = [
   'neuron.h',
   'utils.cpp',
   'utils.h',
+  'cli_common.cpp',
+  'cli_common.h',
   'raw_cli.cpp',
   'raw_cli.h',
+  'scenario_cli.cpp',
+  'scenario_cli.h',
+  'allocate_once.cpp',
+  'allocate_once.h',
   'scope_guard.h'
 ]
 

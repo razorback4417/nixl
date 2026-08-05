@@ -6,6 +6,8 @@
 #ifndef NIXL_BENCHMARK_NIXLBENCH_SRC_UTILS_RAW_CLI_H
 #define NIXL_BENCHMARK_NIXLBENCH_SRC_UTILS_RAW_CLI_H
 
+#include "utils/cli_common.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -17,12 +19,6 @@
 #include <nixl_types.h>
 
 namespace nixlbench {
-
-struct PluginMetadata {
-    std::string name;
-    nixl_mem_list_t memory_types;
-    nixl_b_params_t parameters;
-};
 
 struct RawOptions {
     std::string operation = "WRITE";
@@ -37,13 +33,6 @@ struct RawOptions {
     int pipeline_depth = 1;
     bool check_consistency = false;
     bool dry_run = false;
-};
-
-struct FileOptions {
-    std::string path;
-    std::string filenames;
-    int num_files = 1;
-    bool direct = false;
 };
 
 struct RawPosixRequest {
@@ -61,15 +50,6 @@ struct RawCommandResult {
 
 bool
 isRawCommand(int argc, char *argv[]);
-
-std::optional<size_t>
-parseHumanSize(const std::string &value, std::string &error);
-
-std::optional<PluginMetadata>
-discoverPluginMetadata(const std::string &name, std::string &error);
-
-std::optional<std::vector<PluginMetadata>>
-discoverPluginsWithMemoryType(nixl_mem_t memory_type, std::string &error);
 
 int
 parseRawPosixCommand(int argc,

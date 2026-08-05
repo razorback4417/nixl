@@ -875,7 +875,8 @@ xferBenchConfig::parseDeviceList() {
 
 bool
 xferBenchConfig::isStorageBackend() {
-    return (XFERBENCH_BACKEND_GDS == xferBenchConfig::backend ||
+    return (XFERBENCH_SEG_TYPE_FILE == xferBenchConfig::target_seg_type ||
+            XFERBENCH_BACKEND_GDS == xferBenchConfig::backend ||
             XFERBENCH_BACKEND_GDS_MT == xferBenchConfig::backend ||
             XFERBENCH_BACKEND_HF3FS == xferBenchConfig::backend ||
             XFERBENCH_BACKEND_POSIX == xferBenchConfig::backend ||
@@ -1041,7 +1042,8 @@ parseGusliDeviceList(const std::string &device_list,
 }
 
 bool
-xferBenchUtils::checkConsistency(std::vector<std::vector<xferBenchIOV>> &iov_lists) {
+xferBenchUtils::checkConsistency(std::vector<std::vector<xferBenchIOV>> &iov_lists,
+                                 std::optional<uint8_t> expected_value) {
     int i = 0, j = 0;
     static bool gusli_devmap_init = false;
     static std::vector<GusliDeviceConfig> gusli_devs;
@@ -1168,6 +1170,9 @@ xferBenchUtils::checkConsistency(std::vector<std::vector<xferBenchIOV>> &iov_lis
                 check_val = XFERBENCH_INITIATOR_BUFFER_ELEMENT;
             } else if ("READ" == xferBenchConfig::op_type) {
                 check_val = XFERBENCH_TARGET_BUFFER_ELEMENT;
+            }
+            if (expected_value) {
+                check_val = *expected_value;
             }
             rc = allBytesAre(addr, len, check_val);
             if (true != rc) {
