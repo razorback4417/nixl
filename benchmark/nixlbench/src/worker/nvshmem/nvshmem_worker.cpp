@@ -167,7 +167,7 @@ execTransfer(const std::vector<std::vector<xferBenchIOV>> &local_iovs,
 std::variant<xferBenchStats, int>
 xferBenchNvshmemWorker::transfer(size_t block_size,
                                  const std::vector<std::vector<xferBenchIOV>> &local_trans_lists,
-                                 const std::vector<std::vector<xferBenchIOV>> &remote_trans_lists) {
+                                 std::vector<std::vector<xferBenchIOV>> &remote_trans_lists) {
     cudaEvent_t start_event, stop_event;
     int num_iter = xferBenchConfig::num_iter / xferBenchConfig::num_threads;
     int skip = xferBenchConfig::warmup_iter / xferBenchConfig::num_threads;

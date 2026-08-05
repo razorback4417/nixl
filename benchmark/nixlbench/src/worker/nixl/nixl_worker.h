@@ -29,6 +29,7 @@
 #include <unistd.h>
 #include <nixl.h>
 #include "utils/utils.h"
+#include "utils/allocate_once.h"
 #include "worker/worker.h"
 #include <random>
 #include "worker/nixl/nixl_mem_region.h"
@@ -44,11 +45,14 @@ class xferBenchNixlWorker: public xferBenchWorker {
         std::vector<NixlMemRegion> remote_regs_;
         std::vector<NixlMemRegion> local_regs_;
         std::vector<GusliDeviceConfig> gusli_devices;
+        std::optional<nixlbench::AllocateOnceRequest> allocate_once_;
+        std::vector<nixlbench::OffsetSequence> offset_sequences_;
 
     public:
         explicit xferBenchNixlWorker(
             const std::vector<std::string> &devices,
-            const std::optional<nixl_b_params_t> &plugin_parameters = std::nullopt);
+            const std::optional<nixl_b_params_t> &plugin_parameters = std::nullopt,
+            std::optional<nixlbench::AllocateOnceRequest> allocate_once = std::nullopt);
         ~xferBenchNixlWorker() override;
 
         // Memory management
@@ -69,7 +73,11 @@ class xferBenchNixlWorker: public xferBenchWorker {
         std::variant<xferBenchStats, int>
         transfer(size_t block_size,
                  const std::vector<std::vector<xferBenchIOV>> &local_iov_lists,
-                 const std::vector<std::vector<xferBenchIOV>> &remote_iov_lists) override;
+                 std::vector<std::vector<xferBenchIOV>> &remote_iov_lists) override;
+        bool
+        validateTransfer(bool is_initiator,
+                         std::vector<std::vector<xferBenchIOV>> &local_iov_lists,
+                         std::vector<std::vector<xferBenchIOV>> &remote_iov_lists) override;
 
     private:
         std::optional<xferBenchIOV>
@@ -86,6 +94,8 @@ class xferBenchNixlWorker: public xferBenchWorker {
         ensureFileHasConsistencyData(const GusliDeviceConfig &device, size_t size);
         uint64_t
         getFileOffset(size_t current_offset, size_t max_offset_in_blocks, size_t block_size);
+        std::vector<std::vector<xferBenchIOV>>
+        allocateOnceMemory();
 
         std::mt19937_64 default_rng_;
 };

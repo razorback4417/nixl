@@ -23,9 +23,11 @@
 #include <cstring>
 #include <fcntl.h>
 #include <filesystem>
+#include <functional>
 #include <iomanip>
 #include <memory>
 #include <numeric>
+#include <set>
 #include <sstream>
 #include "utils/neuron.h"
 #include "utils/utils.h"
@@ -106,9 +108,12 @@ getRandomSeed() {
     return seed;
 }
 
-xferBenchNixlWorker::xferBenchNixlWorker(const std::vector<std::string> &devices,
-                                         const std::optional<nixl_b_params_t> &plugin_parameters)
+xferBenchNixlWorker::xferBenchNixlWorker(
+    const std::vector<std::string> &devices,
+    const std::optional<nixl_b_params_t> &plugin_parameters,
+    std::optional<nixlbench::AllocateOnceRequest> allocate_once)
     : xferBenchWorker(),
+      allocate_once_(std::move(allocate_once)),
       default_rng_(getRandomSeed()) {
     seg_type = GET_SEG_TYPE(isInitiator());
 
@@ -188,16 +193,17 @@ xferBenchNixlWorker::xferBenchNixlWorker(const std::vector<std::string> &devices
                   << ", nc_count " << nc_count << ", post threads "
                   << xferBenchConfig::progress_threads << std::endl;
     } else if (0 == xferBenchConfig::backend.compare(XFERBENCH_BACKEND_GDS)) {
-        // Using default param values for GDS backend
-        std::cout << "GDS backend" << std::endl;
-        backend_params["batch_pool_size"] = std::to_string(xferBenchConfig::gds_batch_pool_size);
-        backend_params["batch_limit"] = std::to_string(xferBenchConfig::gds_batch_limit);
-        std::cout << "GDS batch pool size: " << xferBenchConfig::gds_batch_pool_size << std::endl;
-        std::cout << "GDS batch limit: " << xferBenchConfig::gds_batch_limit << std::endl;
+        if (!plugin_parameters) {
+            // Preserve the existing flags-only GDS parameter assembly.
+            backend_params["batch_pool_size"] =
+                std::to_string(xferBenchConfig::gds_batch_pool_size);
+            backend_params["batch_limit"] = std::to_string(xferBenchConfig::gds_batch_limit);
+        }
     } else if (0 == xferBenchConfig::backend.compare(XFERBENCH_BACKEND_GDS_MT)) {
-        std::cout << "GDS_MT backend" << std::endl;
-        backend_params["thread_count"] = std::to_string(xferBenchConfig::gds_mt_num_threads);
-        std::cout << "GDS MT Num threads: " << xferBenchConfig::gds_mt_num_threads << std::endl;
+        if (!plugin_parameters) {
+            // Preserve the existing flags-only GDS_MT parameter assembly.
+            backend_params["thread_count"] = std::to_string(xferBenchConfig::gds_mt_num_threads);
+        }
     } else if (0 == xferBenchConfig::backend.compare(XFERBENCH_BACKEND_POSIX)) {
         if (!plugin_parameters) {
             // Preserve the existing flags-only POSIX parameter assembly.
@@ -220,7 +226,7 @@ xferBenchNixlWorker::xferBenchNixlWorker(const std::vector<std::string> &devices
             backend_params["kernel_queue_size"] =
                 std::to_string(xferBenchConfig::posix_kernel_queue_size);
         } else {
-            std::cout << "POSIX backend with plugin parameters from raw CLI" << std::endl;
+            std::cout << "POSIX backend with explicitly supplied plugin parameters" << std::endl;
         }
     } else if (0 == xferBenchConfig::backend.compare(XFERBENCH_BACKEND_GPUNETIO)) {
         std::cout << "GPUNETIO backend, network device " << devices[0] << " GPU device "
@@ -870,6 +876,28 @@ cleanupBasicDescVram(xferBenchIOV &iov) {
 }
 
 static void
+initializeIov(xferBenchIOV &iov, nixl_mem_t memory_type, uint8_t value) {
+    if (memory_type == DRAM_SEG) {
+        memset(reinterpret_cast<void *>(iov.addr), value, iov.len);
+        return;
+    }
+    if (neuronCoreCount() > 0) {
+        CHECK_NEURON_ERROR(neuronMemset(reinterpret_cast<void *>(iov.addr), value, iov.len),
+                           "Failed to initialize scenario buffer");
+        return;
+    }
+#if HAVE_CUDA
+    CHECK_CUDA_ERROR(cudaSetDevice(iov.devId), "Failed to set device");
+    CHECK_CUDA_ERROR(cudaMemset(reinterpret_cast<void *>(iov.addr), value, iov.len),
+                     "Failed to initialize scenario buffer");
+#elif HAVE_ROCM
+    CHECK_CUDA_ERROR(hipSetDevice(iov.devId), "Failed to set device");
+    CHECK_CUDA_ERROR(hipMemset(reinterpret_cast<void *>(iov.addr), value, iov.len),
+                     "Failed to initialize scenario buffer");
+#endif
+}
+
+static void
 cleanupBasicDescObj(xferBenchIOV &iov) {
     if (!xferBenchUtils::rmObj(iov.metaInfo)) {
         std::cerr << "Failed to remove object: " << iov.metaInfo << std::endl;
@@ -977,9 +1005,114 @@ xferBenchNixlWorker::ensureFileHasConsistencyData(const GusliDeviceConfig &devic
     return true;
 }
 
+std::vector<std::vector<xferBenchIOV>>
+xferBenchNixlWorker::allocateOnceMemory() {
+    const auto &request = *allocate_once_;
+    nixl_opt_args_t opt_args;
+    opt_args.backends.push_back(backend_engine);
+
+    std::vector<xferBenchIOV> file_iovs;
+    file_iovs.reserve(request.files.size());
+    remote_fds.reserve(request.files.size());
+    std::set<std::pair<dev_t, ino_t>> file_identities;
+    for (const auto &path : request.files) {
+        const int access_flags = (request.operation == NIXL_WRITE ? O_RDWR : O_RDONLY) |
+            O_LARGEFILE | (request.direct ? O_DIRECT : 0);
+        int flags = access_flags;
+        if (request.managed_files) {
+            flags |= O_NOFOLLOW;
+        }
+        int fd = open(path.c_str(), flags);
+        if (fd < 0) {
+            std::cerr << "Failed to open scenario file " << path << ": " << strerror(errno)
+                      << std::endl;
+            return {};
+        }
+        if (request.managed_files) {
+            // Pin the path with O_NOFOLLOW, then reopen that exact inode through procfs. Some
+            // FILE_SEG backends reject O_NOFOLLOW in the registered descriptor flags.
+            const std::string pinned_path = "/proc/self/fd/" + std::to_string(fd);
+            const int pinned_fd = open(pinned_path.c_str(), access_flags);
+            close(fd);
+            fd = pinned_fd;
+            if (fd < 0) {
+                std::cerr << "Failed to reopen pinned scenario file " << path << ": "
+                          << strerror(errno) << std::endl;
+                return {};
+            }
+        }
+        struct stat info{};
+        if (fstat(fd, &info) != 0 || (request.managed_files && !S_ISREG(info.st_mode))) {
+            std::cerr << "Scenario file is no longer a valid regular file: " << path << std::endl;
+            close(fd);
+            return {};
+        }
+        if (!file_identities.emplace(info.st_dev, info.st_ino).second) {
+            std::cerr << "Scenario files must still refer to distinct files: " << path << std::endl;
+            close(fd);
+            return {};
+        }
+        remote_fds.emplace_back(fd, request.file_size, 0);
+        file_iovs.emplace_back(0, request.file_size, fd);
+    }
+
+    nixl_reg_dlist_t file_desc_list = iovListToNixlRegDlist(file_iovs, FILE_SEG);
+    CHECK_NIXL_ERROR(agent->registerMem(file_desc_list, &opt_args), "registerMem failed");
+    remote_regs_.emplace_back(*agent, backend_engine, FILE_SEG, std::move(file_iovs));
+
+    const size_t buffer_size = request.block_size * request.batch_size;
+    std::vector<std::vector<xferBenchIOV>> iov_lists;
+    iov_lists.reserve(static_cast<size_t>(request.threads));
+    for (int thread = 0; thread < request.threads; ++thread) {
+        std::optional<xferBenchIOV> local_iov;
+        if (seg_type == DRAM_SEG) {
+            local_iov = initBasicDescDram(buffer_size, 0);
+        } else if (seg_type == VRAM_SEG) {
+            local_iov = initBasicDescVram(buffer_size, 0);
+        }
+        if (!local_iov) {
+            std::cerr << "Failed to allocate scenario transfer buffer for thread " << thread
+                      << std::endl;
+            return {};
+        }
+        if (request.operation == NIXL_WRITE) {
+            initializeIov(*local_iov, seg_type, XFERBENCH_TARGET_BUFFER_ELEMENT);
+        }
+        std::vector<xferBenchIOV> thread_iovs{*local_iov};
+        nixl_reg_dlist_t local_desc_list = iovListToNixlRegDlist(thread_iovs, seg_type);
+        CHECK_NIXL_ERROR(agent->registerMem(local_desc_list, &opt_args), "registerMem failed");
+        local_regs_.emplace_back(*agent, backend_engine, seg_type, thread_iovs);
+        if (seg_type == DRAM_SEG && request.check_consistency && request.operation == NIXL_READ) {
+            memset(reinterpret_cast<void *>(local_iov->addr),
+                   XFERBENCH_INITIATOR_BUFFER_ELEMENT,
+                   local_iov->len);
+        }
+        iov_lists.push_back(std::move(thread_iovs));
+    }
+
+    std::string region_error;
+    auto regions = nixlbench::allocateOnceThreadRegions(request, region_error);
+    if (!regions) {
+        std::cerr << "Failed to partition scenario files: " << region_error << std::endl;
+        return {};
+    }
+    offset_sequences_.clear();
+    offset_sequences_.reserve(regions->size());
+    for (size_t thread = 0; thread < regions->size(); ++thread) {
+        const uint64_t thread_seed =
+            request.seed + 0x9e3779b97f4a7c15ULL * static_cast<uint64_t>(thread + 1);
+        offset_sequences_.emplace_back(
+            (*regions)[thread], request.batch_size, request.offset_mode, thread_seed);
+    }
+    return iov_lists;
+}
+
 /** Allocate and register memory descriptors for each thread. */
 std::vector<std::vector<xferBenchIOV>>
 xferBenchNixlWorker::allocateMemory(int num_threads) {
+    if (allocate_once_) {
+        return allocateOnceMemory();
+    }
     std::vector<std::vector<xferBenchIOV>> iov_lists;
     size_t i, buffer_size, num_devices = 0;
     nixl_opt_args_t opt_args;
@@ -1258,6 +1391,26 @@ xferBenchNixlWorker::exchangeIOV(const std::vector<std::vector<xferBenchIOV>> &l
     std::vector<std::vector<xferBenchIOV>> res;
     int desc_str_sz;
 
+    if (allocate_once_) {
+        std::string region_error;
+        auto regions = nixlbench::allocateOnceThreadRegions(*allocate_once_, region_error);
+        if (!regions) {
+            std::cerr << "Failed to partition scenario files: " << region_error << std::endl;
+            return {};
+        }
+        res.reserve(local_iovs.size());
+        for (size_t thread = 0; thread < local_iovs.size(); ++thread) {
+            std::vector<xferBenchIOV> remote_iovs;
+            remote_iovs.reserve(local_iovs[thread].size());
+            const int fd = remote_fds[(*regions)[thread].file_index].fd;
+            for (const auto &local_iov : local_iovs[thread]) {
+                remote_iovs.emplace_back(0, local_iov.len, fd);
+            }
+            res.push_back(std::move(remote_iovs));
+        }
+        return res;
+    }
+
     if (xferBenchConfig::isStorageBackend()) {
         size_t fd_idx = 0;
         uint64_t file_offset = 0;
@@ -1462,6 +1615,8 @@ struct slotState {
     std::vector<int> indices;
 };
 
+using DescriptorUpdater = std::function<void(std::vector<xferBenchIOV> &)>;
+
 // Register memory (if --reregister_mem) and create the XferReq for a slot
 // that doesn't already have one. Records the wall-clock time as
 // prepare_duration.
@@ -1490,7 +1645,7 @@ prepareSlot(nixlAgent *agent,
         if (xferBenchConfig::prepared_xfer) {
             if (!slot.prep_local_dlist) {
                 nixl_xfer_dlist_t ld(GET_SEG_TYPE(true));
-                nixl_xfer_dlist_t rd(GET_SEG_TYPE(false));
+                nixl_xfer_dlist_t rd(getRemoteSegType());
                 prepareTransferDescriptors(ld, rd, slot.local_iov, slot.remote_iov);
                 rc = agent->prepXferDlist(NIXL_INIT_AGENT, ld, slot.prep_local_dlist, &params);
                 if (rc != NIXL_SUCCESS) {
@@ -1512,7 +1667,7 @@ prepareSlot(nixlAgent *agent,
                                     &params);
         } else {
             nixl_xfer_dlist_t ld(GET_SEG_TYPE(true));
-            nixl_xfer_dlist_t rd(GET_SEG_TYPE(false));
+            nixl_xfer_dlist_t rd(getRemoteSegType());
             prepareTransferDescriptors(ld, rd, slot.local_iov, slot.remote_iov);
             rc = agent->createXferReq(op, ld, rd, target, slot.req, &params);
         }
@@ -1608,6 +1763,7 @@ execTransferLoop(nixlAgent *agent,
                  xferBenchStats &thread_stats,
                  const std::vector<xferBenchIOV> &local_iov,
                  const std::vector<xferBenchIOV> &remote_iov,
+                 const DescriptorUpdater &update_descriptors,
                  const std::atomic<int> *terminate_ptr = nullptr) {
     const int depth = std::min(xferBenchConfig::pipeline_depth, num_iter);
     if (depth < xferBenchConfig::pipeline_depth) {
@@ -1638,6 +1794,9 @@ execTransferLoop(nixlAgent *agent,
         if (terminate_ptr && terminate_ptr->load()) [[unlikely]] {
             cleanupSlots(agent, backend_engine, slots);
             return -1;
+        }
+        if (update_descriptors) {
+            update_descriptors(slots[s].remote_iov);
         }
         nixl_status_t rc =
             prepareSlot(agent, backend_engine, op, target, params, thread_stats, slots[s]);
@@ -1700,6 +1859,9 @@ execTransferLoop(nixlAgent *agent,
                     cleanupSlots(agent, backend_engine, slots);
                     return -1;
                 }
+                if (update_descriptors) {
+                    update_descriptors(slots[s].remote_iov);
+                }
                 rc = prepareSlot(agent, backend_engine, op, target, params, thread_stats, slots[s]);
                 if (rc != NIXL_SUCCESS) [[unlikely]] {
                     std::cerr << "prepareSlot failed on resubmit for slot " << s << ": "
@@ -1728,11 +1890,13 @@ static int
 execTransfer(nixlAgent *agent,
              nixlBackendH *backend_engine,
              const std::vector<std::vector<xferBenchIOV>> &local_iovs,
-             const std::vector<std::vector<xferBenchIOV>> &remote_iovs,
+             std::vector<std::vector<xferBenchIOV>> &remote_iovs,
              const nixl_xfer_op_t op,
              const int num_iter,
              const int num_threads,
+             const size_t block_size,
              xferBenchStats &stats,
+             std::vector<nixlbench::OffsetSequence> *offset_sequences = nullptr,
              const std::atomic<int> *terminate_ptr = nullptr) {
     int ret = 0;
     stats.clear();
@@ -1745,6 +1909,17 @@ execTransfer(nixlAgent *agent,
         const int tid = omp_get_thread_num();
         const auto &local_iov = local_iovs[tid];
         const auto &remote_iov = remote_iovs[tid];
+
+        DescriptorUpdater update_descriptors;
+        if (offset_sequences) {
+            update_descriptors = [&, tid](std::vector<xferBenchIOV> &descriptors) {
+                const auto slots = (*offset_sequences)[static_cast<size_t>(tid)].next();
+                for (size_t index = 0; index < descriptors.size(); ++index) {
+                    descriptors[index].addr = slots[index] * block_size;
+                }
+                remote_iovs[static_cast<size_t>(tid)] = descriptors;
+            };
+        }
 
         // Setup transfer parameters
         nixl_opt_args_t params;
@@ -1762,6 +1937,7 @@ execTransfer(nixlAgent *agent,
                                       thread_stats,
                                       local_iov,
                                       remote_iov,
+                                      update_descriptors,
                                       terminate_ptr);
 
         if (result != 0) [[unlikely]] {
@@ -1780,7 +1956,7 @@ execTransfer(nixlAgent *agent,
 std::variant<xferBenchStats, int>
 xferBenchNixlWorker::transfer(size_t block_size,
                               const std::vector<std::vector<xferBenchIOV>> &local_iovs,
-                              const std::vector<std::vector<xferBenchIOV>> &remote_iovs) {
+                              std::vector<std::vector<xferBenchIOV>> &remote_iovs) {
     int num_iter = xferBenchConfig::num_iter / xferBenchConfig::num_threads;
     int skip = xferBenchConfig::warmup_iter / xferBenchConfig::num_threads;
     xferBenchStats stats;
@@ -1806,7 +1982,9 @@ xferBenchNixlWorker::transfer(size_t block_size,
                            xfer_op,
                            skip,
                            xferBenchConfig::num_threads,
+                           block_size,
                            stats,
+                           allocate_once_ ? &offset_sequences_ : nullptr,
                            &terminate);
         if (ret < 0) {
             return std::variant<xferBenchStats, int>(ret);
@@ -1825,7 +2003,9 @@ xferBenchNixlWorker::transfer(size_t block_size,
                        xfer_op,
                        num_iter,
                        xferBenchConfig::num_threads,
+                       block_size,
                        stats,
+                       allocate_once_ ? &offset_sequences_ : nullptr,
                        &terminate);
     if (ret < 0) {
         return std::variant<xferBenchStats, int>(ret);
@@ -1833,6 +2013,20 @@ xferBenchNixlWorker::transfer(size_t block_size,
 
     synchronize();
     return std::variant<xferBenchStats, int>(stats);
+}
+
+bool
+xferBenchNixlWorker::validateTransfer(bool is_initiator,
+                                      std::vector<std::vector<xferBenchIOV>> &local_iovs,
+                                      std::vector<std::vector<xferBenchIOV>> &remote_iovs) {
+    if (!allocate_once_) {
+        return xferBenchWorker::validateTransfer(is_initiator, local_iovs, remote_iovs);
+    }
+    if (!xferBenchConfig::check_consistency) {
+        return true;
+    }
+    auto &iovs = allocate_once_->operation == NIXL_READ ? local_iovs : remote_iovs;
+    return xferBenchUtils::checkConsistency(iovs, XFERBENCH_TARGET_BUFFER_ELEMENT);
 }
 
 void

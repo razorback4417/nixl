@@ -19,8 +19,10 @@
 #include <iostream>
 #include <nixl.h>
 #include <sys/time.h>
+#include "utils/allocate_once.h"
 #include "utils/utils.h"
 #include "utils/raw_cli.h"
+#include "utils/scenario_cli.h"
 #include "utils/scope_guard.h"
 #include "worker/nixl/nixl_worker.h"
 #if HAVE_NVSHMEM && HAVE_CUDA
@@ -129,7 +131,7 @@ static int processBatchSizes(xferBenchWorker &worker,
             worker.exchangeIOV(local_trans_lists, block_size);
             worker.poll(block_size);
 
-            if (!xferBenchUtils::validateTransfer(false, local_trans_lists, local_trans_lists)) {
+            if (!worker.validateTransfer(false, local_trans_lists, local_trans_lists)) {
                 return EXIT_FAILURE;
             }
             if (IS_PAIRWISE_AND_SG()) {
@@ -143,10 +145,10 @@ static int processBatchSizes(xferBenchWorker &worker,
 
             auto result = worker.transfer(block_size, local_trans_lists, remote_trans_lists);
             if (std::holds_alternative<int>(result)) {
-                return 1;
+                return EXIT_FAILURE;
             }
 
-            if (!xferBenchUtils::validateTransfer(true, local_trans_lists, remote_trans_lists)) {
+            if (!worker.validateTransfer(true, local_trans_lists, remote_trans_lists)) {
                 return EXIT_FAILURE;
             }
 
@@ -160,14 +162,16 @@ static int processBatchSizes(xferBenchWorker &worker,
 
 namespace {
 std::unique_ptr<xferBenchWorker>
-createWorker(const std::optional<nixl_b_params_t> &plugin_parameters) {
+createWorker(const std::optional<nixl_b_params_t> &plugin_parameters,
+             std::optional<nixlbench::AllocateOnceRequest> allocate_once = std::nullopt) {
     if (xferBenchConfig::worker_type == XFERBENCH_WORKER_NIXL) {
         std::vector<std::string> devices = xferBenchConfig::parseDeviceList();
         if (devices.empty()) {
             std::cerr << "Failed to parse device list" << std::endl;
             return nullptr;
         }
-        return std::make_unique<xferBenchNixlWorker>(devices, plugin_parameters);
+        return std::make_unique<xferBenchNixlWorker>(
+            devices, plugin_parameters, std::move(allocate_once));
     } else if (xferBenchConfig::worker_type == XFERBENCH_WORKER_NVSHMEM) {
 #if HAVE_NVSHMEM && HAVE_CUDA
         return std::make_unique<xferBenchNvshmemWorker>();
@@ -183,12 +187,14 @@ createWorker(const std::optional<nixl_b_params_t> &plugin_parameters) {
 } // namespace
 
 static int
-runBenchmark(const std::optional<nixl_b_params_t> &plugin_parameters = std::nullopt) {
+runBenchmark(const std::optional<nixl_b_params_t> &plugin_parameters = std::nullopt,
+             std::optional<nixlbench::AllocateOnceRequest> allocate_once = std::nullopt) {
     int ret = 0;
     int num_threads = xferBenchConfig::num_threads;
 
     // Create the appropriate worker based on worker configuration
-    std::unique_ptr<xferBenchWorker> worker_ptr = createWorker(plugin_parameters);
+    std::unique_ptr<xferBenchWorker> worker_ptr =
+        createWorker(plugin_parameters, std::move(allocate_once));
     if (!worker_ptr) {
         return EXIT_FAILURE;
     }
@@ -204,6 +210,9 @@ runBenchmark(const std::optional<nixl_b_params_t> &plugin_parameters = std::null
     }
 
     std::vector<std::vector<xferBenchIOV>> iov_lists = worker_ptr->allocateMemory(num_threads);
+    if (iov_lists.empty()) {
+        return EXIT_FAILURE;
+    }
     auto mem_guard = make_scope_guard ([&] {
         worker_ptr->deallocateMemory(iov_lists);
     });
@@ -240,6 +249,28 @@ runBenchmark(const std::optional<nixl_b_params_t> &plugin_parameters = std::null
 
 int
 main(int argc, char *argv[]) {
+    if (nixlbench::isScenarioCommand(argc, argv)) {
+        const auto result = nixlbench::prepareScenarioCommand(argc, argv, std::cout, std::cerr);
+        if (result.status != EXIT_SUCCESS || !result.execute) {
+            return result.status;
+        }
+        if (!nixlbench::prepareAllocateOnceFiles(*result.request, std::cerr)) {
+            return EXIT_FAILURE;
+        }
+        auto arguments = nixlbench::allocateOnceBenchmarkArguments(*result.request, argv[0]);
+        std::vector<char *> argument_pointers;
+        argument_pointers.reserve(arguments.size());
+        for (auto &argument : arguments) {
+            argument_pointers.push_back(argument.data());
+        }
+        if (xferBenchConfig::parseConfig(static_cast<int>(argument_pointers.size()),
+                                         argument_pointers.data()) != EXIT_SUCCESS) {
+            return EXIT_FAILURE;
+        }
+        const auto plugin_parameters = result.request->plugin_parameters;
+        return runBenchmark(plugin_parameters, std::move(*result.request));
+    }
+
     if (nixlbench::isRawCommand(argc, argv)) {
         const auto result = nixlbench::prepareRawCommand(argc, argv, std::cout, std::cerr);
         if (result.status != EXIT_SUCCESS || !result.execute) {
@@ -248,7 +279,7 @@ main(int argc, char *argv[]) {
         return runBenchmark(result.plugin_parameters);
     }
 
-    // Preserve the flags-only interface by routing every non-raw invocation directly to gflags.
+    // Preserve the flags-only interface for invocations outside the explicit command hierarchies.
     if (xferBenchConfig::parseConfig(argc, argv) != EXIT_SUCCESS) {
         return EXIT_FAILURE;
     }

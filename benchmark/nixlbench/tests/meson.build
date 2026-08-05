@@ -8,7 +8,13 @@ gtest_dep = dependency('gtest',
 
 nixlbench_tests = executable(
   'nixlbench_tests',
-  ['raw_cli_test.cpp', 'posix_integration_test.cpp'],
+  [
+    'raw_cli_test.cpp',
+    'scenario_cli_test.cpp',
+    'allocate_once_test.cpp',
+    'posix_integration_test.cpp',
+    'allocate_once_integration_test.cpp',
+  ],
   include_directories: inc_dir,
   link_with: [utils_lib, nixlbench_runtimes],
   dependencies: deps + [gtest_dep],

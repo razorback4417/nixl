@@ -59,7 +59,7 @@ class xferBenchNvshmemWorker: public xferBenchWorker {
         std::variant<xferBenchStats, int>
         transfer(size_t block_size,
                  const std::vector<std::vector<xferBenchIOV>> &local_iov_lists,
-                 const std::vector<std::vector<xferBenchIOV>> &remote_iov_lists) override;
+                 std::vector<std::vector<xferBenchIOV>> &remote_iov_lists) override;
 
     private:
         std::optional<xferBenchIOV>
